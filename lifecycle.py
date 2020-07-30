@@ -12,52 +12,40 @@ from numba.experimental import jitclass
 import time
 
 
-# In[2]:
-
-
-#include diapause
-#include more biological data
-#write up one/two pages what is assumed and how is it justified, 
-#include basic analysis of behaviour. Are results reasonable?
-#compare with other models
-#How could it be used to replicate experiments? How would I simulate a truck in a field?
-    #give coords. Eggs hatch with same coords as adult. adult moves. if adult in
-    #fixed range collect etc.
-#Or a lab experiment?
-
-
-# In[3]:
+# In[42]:
 
 
 spec = [('stage', types.string),
-        ('T', int32),
+        ('initial_T', float64),
         ('age', float64),
         ('stage_age', float64),
         ('p_death', float64),
         ('stage_length', float64),
         ('egg_rate', float64),
+        ('birth_density', int32)
        ]
 
 @jitclass(spec)
 class Mosquito:
-    def __init__(self, stage, T, age):
-        self.T = T
+    def __init__(self, stage, T, age, density):
+        self.initial_T = T
         self.stage = stage
         self.age = age
         self.stage_age = 0.0
-        self.p_death= self.get_p_death()
-        self.stage_length: float = self.get_stage_length()
+        self.birth_density = density
+        self.p_death= self.get_p_death(self.initial_T)
+        self.stage_length = self.get_stage_length()
         self.egg_rate = self.get_egg_rate()
     
-    def get_p_death(self):
+    def get_p_death(self, T):
         if self.stage == 'egg':
-            return 1 - 0.91 * (1/(1 + np.exp(-5-self.T))) *(1/(1 + np.exp(self.T-40)))
+            return 1 - 0.91 * (1/(1 + np.exp(-5-T))) *(1/(1 + np.exp(T-40)))
         elif self.stage == 'larva':
-            return 1 - 0.96 * (1/(1 + np.exp(4-self.T))) *(1/(1 + np.exp(self.T-36)))
+            return 1 - 0.96 * (1/(1 + np.exp(4-T))) *(1/(1 + np.exp(T-36)))
         elif self.stage == 'pupa':
-            return 1 - 0.999 * (1/(1 + np.exp(13-self.T))) *(1/(1 + np.exp(self.T-36)))
+            return 1 - 0.999 * (1/(1 + np.exp(13-T))) *(1/(1 + np.exp(T-36)))
         elif self.stage == 'naive' or self.stage == 'adult':
-            return 1 - 0.98 * (1/(1 + np.exp(-5-self.T))) *(1/(1 + np.exp(self.T-38)))
+            return 1 - 0.98 * (1/(1 + np.exp(-5-T))) *(1/(1 + np.exp(T-38)))
         
     def get_stage_length(self):
 #         Values taken from 'Development and calibration of a model for the potential 
@@ -65,11 +53,11 @@ class Mosquito:
         if self.stage == 'egg':
             a = 0.0000416657
             T_sup = 37.3253
-            if self.T < T_sup:
-                mean_rate = a * self.T ** 2 * (T_sup - self.T)
+            if self.initial_T < T_sup:
+                mean_rate = a * self.initial_T ** 2 * (T_sup - self.initial_T)
                 mean = 1 / mean_rate
             else:
-                mean = np.nan
+                mean = None
         else:
             if self.stage == 'larva':
                 a = 0.00008604
@@ -90,31 +78,34 @@ class Mosquito:
                 return np.inf
             else:
                 raise Exception('Invalid Stage Name')
-            if T_inf < self.T < T_sup:
-                mean_rate = a * self.T * (self.T - T_inf) * np.sqrt(T_sup - self.T)
-                mean = 1 / mean_rate
+            if T_inf < self.initial_T < T_sup:
+                mean_rate = a * self.initial_T * (self.initial_T - T_inf) * np.sqrt(T_sup - self.initial_T)
+                if self.stage in ['larva', 'pupa']:
+                    mean = (1 + 0.2789 * self.birth_density ** 0.2789) / mean_rate
+                else:
+                    mean = 1 / mean_rate
             else:
-                mean = np.nan
-        if mean is np.nan:
+                mean = None
+        if mean is None:
             return np.inf
         else:
             return np.random.gamma(mean * 10, 0.1)
     
     def get_egg_rate(self):
         if self.stage == 'adult':
-            return max(0, -0.04 * (self.T - 14) * (self.T - 52))
+            return max(0, -0.04 * (self.initial_T - 14) * (self.initial_T - 52))
         else:
             return 0
     
-    def develop(self):
+    def develop(self, T, density):
         if self.stage == 'egg':
-            return Mosquito('larva', self.T, self.age)
+            return Mosquito('larva', T, self.age, density)
         elif self.stage == 'larva':
-            return Mosquito('pupa', self.T, self.age)
+            return Mosquito('pupa', T, self.age, density)
         elif self.stage == 'pupa':
-            return Mosquito('naive', self.T, self.age)
+            return Mosquito('naive', T, self.age, density)
         elif self.stage == 'naive':
-            return Mosquito('adult', self.T, self.age)
+            return Mosquito('adult', T, self.age, density)
         else:
             raise Exception('Stage Invalid for Development')
 
@@ -130,16 +121,15 @@ class Mosquito:
             T_sup = 40
         else:
             return
-        mean_rate = a * self.T * (self.T - T_inf) * np.sqrt(T_sup - self.T)
-        mean = 0.2789 * density ** 0.2789 / mean_rate
+        mean_rate = a * self.initial_T * (self.initial_T - T_inf) * np.sqrt(T_sup - self.initial_T)
+        mean = (1 + 0.2789 * density ** 0.2789) / mean_rate
         self.stage_length = np.random.gamma(mean * 10, 0.1)
 
 
-# In[22]:
+# In[43]:
 
 
-mosquito_type = typeof(Mosquito('egg', 25,0))
-mosquito_list_type = typeof([Mosquito('egg', 25,0)])
+mosquito_list_type = typeof([Mosquito('egg', 25,0, 1000)])
 
 specs = [('egg_numbers', types.ListType(int64)),
          ('larva_numbers', types.ListType(int64)),
@@ -164,34 +154,37 @@ class Population:
         self.Temps = typed.List(Temps)
         self.T = self.Temps[0]
         
-        mosquitos = [Mosquito('egg', self.T, 0.0) for i in range(egg_no)]
-        mosquitos += [Mosquito('larva', self.T, 0.0) for i in range(larva_no)]
-        mosquitos += [Mosquito('pupa', self.T, 0.0) for i in range(pupa_no)]
-        mosquitos += [Mosquito('naive', self.T, 0.0) for i in range(naive_no)]
-        mosquitos += [Mosquito('adult', self.T, 0.0) for i in range(adult_no)]
+        density = self.larva_numbers[-1] + self.pupa_numbers[-1]
+        mosquitos = [Mosquito('egg', self.T, 0.0, density) for i in range(egg_no)]
+        mosquitos += [Mosquito('larva', self.T, 0.0, density) for i in range(larva_no)]
+        mosquitos += [Mosquito('pupa', self.T, 0.0, density) for i in range(pupa_no)]
+        mosquitos += [Mosquito('naive', self.T, 0.0, density) for i in range(naive_no)]
+        mosquitos += [Mosquito('adult', self.T, 0.0, density) for i in range(adult_no)]
         self.mosquitos = mosquitos
     
-    def propagate(self, iterations, timestep):
-        for day in range(iterations):
-            survivors = [Mosquito('egg', 25,0.0) for i in range(0)]
+    def propagate(self, iterations, timesteps_in_day):
+        timestep = 1 / timesteps_in_day
+        if len(self.Temps) < iterations:
+            raise Exception("Not enough temperature data for that many iterations")
+        for iteration in range(iterations):
+            survivors = [Mosquito('egg', 25,0.0, 1000) for i in range(0)]
             density = self.larva_numbers[-1] + self.pupa_numbers[-1]
+            Temp = self.Temps[iteration]
             for i, mosquito in enumerate(self.mosquitos):
-                #density dependent p_death
-#                 p_death = 1 - (1 - mosquito.p_death) * self.density_dependence(mosquito)
                 death_value = np.random.random()
-                if 1 - ((1 - mosquito.p_death) * self.density_dependence(mosquito, density)) ** timestep < death_value:
-                    mosquito.update_stage_length(density)
+                if 1 - ((1 - mosquito.get_p_death(Temp)) * self.death_density_dependence(mosquito, density)) ** timestep < death_value:
+#                     mosquito.update_stage_length(density)
                     mosquito.age += timestep
                     mosquito.stage_age += timestep
                     if mosquito.stage == 'adult':
-                        survivors += self.lay_eggs(mosquito, timestep)
+                        survivors += self.lay_eggs(mosquito, timestep, Temp, density)
                     if mosquito.stage_age > mosquito.stage_length:
-                        mosquito = mosquito.develop()
+                        mosquito = mosquito.develop(Temp, density)
                     survivors.append(mosquito)    
             self.mosquitos = list(survivors)
             self.update_numbers()
     
-    def density_dependence(self, mosq, density):
+    def death_density_dependence(self, mosq, density):
         if mosq.stage == 'larva' or mosq.stage == 'pupa':
             return np.exp(-3.819 * 10 ** (-5) * density)
         else:
@@ -218,35 +211,59 @@ class Population:
         self.adult_numbers.append(adults)
         self.total_numbers.append(eggs+larvae+pupae+naives+adults)
     
-    def lay_eggs(self, mosquito, timestep):
+    def lay_eggs(self, mosquito, timestep, Temp, density):
         number = np.random.poisson(mosquito.egg_rate * timestep)
-        return [Mosquito('egg', self.T, 0) for i in range(number)]
+        return [Mosquito('egg', Temp, 0.0, density) for i in range(number)]
 
-def plot(pop, timestep):
+def plot(pop, timestep, include = None):
+    if include is None:
+        include = ['egg', 'larva', 'pupa', 'naive', 'adult', 'total']
     xs = timestep * np.array(range(len(pop.egg_numbers)))
     plt.figure(figsize = (20,10))
-    plt.plot(xs, pop.egg_numbers, label = 'eggs')
-    plt.plot(xs, pop.larva_numbers, label = 'larvae')    
-    plt.plot(xs, pop.pupa_numbers, label = 'pupae')    
-    plt.plot(xs, pop.naive_numbers, label = 'naive')    
-    plt.plot(xs, pop.adult_numbers, label = 'adult')    
-    plt.plot(xs, pop.total_numbers, label = 'total')
+    if 'egg' in include:
+        plt.plot(xs, pop.egg_numbers, label = 'eggs')
+    if 'larva' in include:
+        plt.plot(xs, pop.larva_numbers, label = 'larvae')    
+    if 'pupa' in include:
+        plt.plot(xs, pop.pupa_numbers, label = 'pupae')    
+    if 'naive' in include:
+        plt.plot(xs, pop.naive_numbers, label = 'naive')    
+    if 'adult' in include:
+        plt.plot(xs, pop.adult_numbers, label = 'adult')    
+    if 'total' in include:
+        plt.plot(xs, pop.total_numbers, label = 'total')
     plt.legend()
     plt.show()
 
 
-# In[27]:
+
+# In[45]:
 
 
-test = Population(0,0,0,0,100,[25.0,2.0])
-test.propagate(500,0.05)
+test = Population(0,0,0,0,100,[25.0] * 600)
+test.propagate(400,2)
 plot(test,0.5)
 
 
-# In[26]:
+# In[56]:
 
 
-test = Population(0,0,0,0,100,[25.0,2.0])
-test.propagate(400,0.5)
-plot(test,0.5)
+a = [25+ 10 * np.sin(2 * np.pi * x / 365) for x in np.linspace(0,1000,1000)]
+test = Population(0,0,0,0,100,a)
+get_ipython().run_line_magic('time', 'test.propagate(600,1)')
+plot(test,1)
+
+
+# In[57]:
+
+
+plt.figure(figsize = (20,10))
+plt.plot(a[:600])
+plt.show()
+
+
+# In[58]:
+
+
+plot(test,1,include = ['pupa', 'naive', 'adult'])
 
