@@ -12,7 +12,7 @@ from numba.experimental import jitclass
 import time
 
 
-# In[2]:
+# In[ ]:
 
 
 #include diapause
@@ -26,17 +26,16 @@ import time
 #Or a lab experiment?
 
 
-# In[3]:
+# In[132]:
 
 
 spec = [('stage', types.string),
         ('T', int32),
-        ('age', float64),
-        ('stage_age', float64),
+        ('age', int32),
+        ('stage_age', int32),
         ('p_death', float64),
         ('stage_length', float64),
-        ('egg_rate', float64),
-       ]
+        ('egg_rate', float64)]
 
 @jitclass(spec)
 class Mosquito:
@@ -44,7 +43,7 @@ class Mosquito:
         self.T = T
         self.stage = stage
         self.age = age
-        self.stage_age = 0.0
+        self.stage_age = 0
         self.p_death= self.get_p_death()
         self.stage_length: float = self.get_stage_length()
         self.egg_rate = self.get_egg_rate()
@@ -58,7 +57,7 @@ class Mosquito:
             return 1 - 0.999 * (1/(1 + np.exp(13-self.T))) *(1/(1 + np.exp(self.T-36)))
         elif self.stage == 'naive' or self.stage == 'adult':
             return 1 - 0.98 * (1/(1 + np.exp(-5-self.T))) *(1/(1 + np.exp(self.T-38)))
-        
+            
     def get_stage_length(self):
 #         Values taken from 'Development and calibration of a model for the potential 
 #         establishment and impact of Aedes albopictus in Europe' - Pasquali et al
@@ -135,7 +134,7 @@ class Mosquito:
         self.stage_length = np.random.gamma(mean * 10, 0.1)
 
 
-# In[22]:
+# In[179]:
 
 
 mosquito_type = typeof(Mosquito('egg', 25,0))
@@ -147,44 +146,42 @@ specs = [('egg_numbers', types.ListType(int64)),
          ('naive_numbers', types.ListType(int64)),
          ('adult_numbers', types.ListType(int64)),
          ('total_numbers', types.ListType(int64)),
-         ('Temps', types.ListType(float64)),
          ('T', float64),
          ('mosquitos', mosquito_list_type)
         ]
 
 @jitclass(specs)
 class Population:
-    def __init__(self, egg_no, larva_no, pupa_no, naive_no, adult_no, Temps):
+    def __init__(self, egg_no, larva_no, pupa_no, naive_no, adult_no, T):
         self.egg_numbers = typed.List([egg_no])
         self.larva_numbers = typed.List([larva_no])
         self.pupa_numbers = typed.List([pupa_no])
         self.naive_numbers = typed.List([naive_no])
         self.adult_numbers = typed.List([adult_no])
         self.total_numbers = typed.List([egg_no + larva_no + pupa_no + naive_no + adult_no])
-        self.Temps = typed.List(Temps)
-        self.T = self.Temps[0]
+        self.T = T
         
-        mosquitos = [Mosquito('egg', self.T, 0.0) for i in range(egg_no)]
-        mosquitos += [Mosquito('larva', self.T, 0.0) for i in range(larva_no)]
-        mosquitos += [Mosquito('pupa', self.T, 0.0) for i in range(pupa_no)]
-        mosquitos += [Mosquito('naive', self.T, 0.0) for i in range(naive_no)]
-        mosquitos += [Mosquito('adult', self.T, 0.0) for i in range(adult_no)]
+        mosquitos = [Mosquito('egg', self.T, 0) for i in range(egg_no)]
+        mosquitos += [Mosquito('larva', self.T, 0) for i in range(larva_no)]
+        mosquitos += [Mosquito('pupa', self.T, 0) for i in range(pupa_no)]
+        mosquitos += [Mosquito('naive', self.T, 0) for i in range(naive_no)]
+        mosquitos += [Mosquito('adult', self.T, 0) for i in range(adult_no)]
         self.mosquitos = mosquitos
     
-    def propagate(self, iterations, timestep):
-        for day in range(iterations):
-            survivors = [Mosquito('egg', 25,0.0) for i in range(0)]
+    def propagate(self, n_days):
+        for day in range(n_days):
+            survivors = [Mosquito('egg', 25,0) for i in range(0)]
             density = self.larva_numbers[-1] + self.pupa_numbers[-1]
             for i, mosquito in enumerate(self.mosquitos):
                 #density dependent p_death
 #                 p_death = 1 - (1 - mosquito.p_death) * self.density_dependence(mosquito)
                 death_value = np.random.random()
-                if 1 - ((1 - mosquito.p_death) * self.density_dependence(mosquito, density)) ** timestep < death_value:
+                if 1 - (1 - mosquito.p_death) * self.density_dependence(mosquito, density)                < death_value:
                     mosquito.update_stage_length(density)
-                    mosquito.age += timestep
-                    mosquito.stage_age += timestep
+                    mosquito.age += 1
+                    mosquito.stage_age += 1
                     if mosquito.stage == 'adult':
-                        survivors += self.lay_eggs(mosquito, timestep)
+                        survivors += self.lay_eggs(mosquito)
                     if mosquito.stage_age > mosquito.stage_length:
                         mosquito = mosquito.develop()
                     survivors.append(mosquito)    
@@ -218,35 +215,25 @@ class Population:
         self.adult_numbers.append(adults)
         self.total_numbers.append(eggs+larvae+pupae+naives+adults)
     
-    def lay_eggs(self, mosquito, timestep):
-        number = np.random.poisson(mosquito.egg_rate * timestep)
+    def lay_eggs(self, mosquito):
+        number = round(np.random.gamma(mosquito.egg_rate * 5, 0.2))
         return [Mosquito('egg', self.T, 0) for i in range(number)]
 
-def plot(pop, timestep):
-    xs = timestep * np.array(range(len(pop.egg_numbers)))
+def plot(pop):
     plt.figure(figsize = (20,10))
-    plt.plot(xs, pop.egg_numbers, label = 'eggs')
-    plt.plot(xs, pop.larva_numbers, label = 'larvae')    
-    plt.plot(xs, pop.pupa_numbers, label = 'pupae')    
-    plt.plot(xs, pop.naive_numbers, label = 'naive')    
-    plt.plot(xs, pop.adult_numbers, label = 'adult')    
-    plt.plot(xs, pop.total_numbers, label = 'total')
+    plt.plot(pop.egg_numbers, label = 'eggs')
+    plt.plot(pop.larva_numbers, label = 'larvae')    
+    plt.plot(pop.pupa_numbers, label = 'pupae')    
+    plt.plot(pop.naive_numbers, label = 'naive')    
+    plt.plot(pop.adult_numbers, label = 'adult')    
+    plt.plot(pop.total_numbers, label = 'total')
     plt.legend()
     plt.show()
 
 
-# In[27]:
+# In[186]:
 
-
-test = Population(0,0,0,0,100,[25.0,2.0])
-test.propagate(500,0.05)
-plot(test,0.5)
-
-
-# In[26]:
-
-
-test = Population(0,0,0,0,100,[25.0,2.0])
-test.propagate(400,0.5)
-plot(test,0.5)
+test = Population(0,0,0,0,100,25)
+test.propagate(200)
+plot(test)
 
